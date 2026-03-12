@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DEFCO OP Tool</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tab-active { border-bottom: 4px solid #ef4444; color: #ef4444; font-weight: bold; }
+        .collapse-content { max-height: 0; overflow: hidden; transition: max-height 0.8s cubic-bezier(0, 1, 0, 1); }
+        .expanded .collapse-content { max-height: 10000px; transition: max-height 1s ease-in-out; }
+        .expanded .chevron { transform: rotate(180deg); }
+        .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        
+        .op-card { border: 2px solid #0f172a !important; transition: all 0.2s; position: relative; margin-bottom: 0.5rem; }
+        .coord-pill { background: #cbd5e1; color: #1e293b; padding: 1px 6px; border-radius: 4px; font-weight: 800; font-size: 10px; }
+        
+        .tag-REAL { border-left: 12px solid #ef4444 !important; }
+        .tag-FAKE { border-left: 12px solid #22c55e !important; }
+        .tag-CAPITAL { border-left: 12px solid #0f172a !important; }
+        .tag-AVDV { border-left: 12px solid #3b82f6 !important; }
+        .tag-OTHER { border-left: 12px solid #eab308 !important; }
+        .tag-NONE { border-left: 4px solid transparent; }
+
+        .row-stripe { width: 8px; height: 100%; position: absolute; left: 0; top: 0; }
+        .bg-tag-REAL { background-color: #ef4444 !important; }
+        .bg-tag-FAKE { background-color: #22c55e !important; }
+        .bg-tag-CAPITAL { background-color: #0f172a !important; }
+        .bg-tag-AVDV { background-color: #3b82f6 !important; }
+        .bg-tag-OTHER { background-color: #eab308 !important; }
+        .bg-tag-NONE { background-color: transparent !important; }
+        
+        .row-container { position: relative; padding-left: 10px; }
+        /* Slim Table Rows */
+        tr.compact-row td { padding-top: 0.25rem !important; padding-bottom: 0.25rem !important; height: 40px !important; }
+    </style>
+</head>
+<body class="bg-slate-200 min-h-screen pb-20 font-sans text-slate-900">
+
+    <div class="max-w-7xl mx-auto pt-4 px-4">
+        <div class="bg-white shadow-2xl rounded-2xl p-4 border border-slate-300">
+            
+            <div class="flex flex-col lg:flex-row justify-between items-center mb-4 gap-4 border-b-4 border-slate-900 pb-4">
+                <h1 class="text-2xl font-black text-slate-900 tracking-tighter italic uppercase">⚔️ DEFCO OP Tool</h1>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="downloadTaggedExcel()" id="btnDownload" class="hidden bg-red-600 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-red-700 border-2 border-red-800">Export Excel</button>
+                    <input type="file" id="xlsxFile" accept=".xlsx, .xls, .csv" class="hidden">
+                    <label for="xlsxFile" class="cursor-pointer bg-slate-900 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-700">Upload Data</label>
+                    <div id="dateFilterContainer" class="hidden bg-slate-100 p-1 px-2 rounded-lg border-2 border-slate-300">
+                        <input type="date" id="opDate" class="bg-transparent outline-none text-xs font-bold">
+                    </div>
+                </div>
+            </div>
+
+            <div id="filterSection" class="hidden grid grid-cols-2 gap-4 mb-4 p-3 bg-slate-50 rounded-xl border-2 border-slate-200">
+                <div class="flex flex-col">
+                    <label class="text-[9px] font-bold uppercase text-slate-400">Search Defender</label>
+                    <input type="text" id="searchDef" list="defendersList" placeholder="Defender..." class="p-1.5 rounded-lg border-2 border-slate-200 outline-none text-xs focus:border-blue-500 font-bold">
+                    <datalist id="defendersList"></datalist>
+                </div>
+                <div class="flex flex-col">
+                    <label class="text-[9px] font-bold uppercase text-slate-400">Search Attacker</label>
+                    <input type="text" id="searchAtk" list="attackersList" placeholder="Attacker..." class="p-1.5 rounded-lg border-2 border-slate-200 outline-none text-xs focus:border-red-500 font-bold">
+                    <datalist id="attackersList"></datalist>
+                </div>
+            </div>
+
+            <div id="uiContainer" class="hidden">
+                <div class="flex justify-between items-center mb-4 border-b-2 border-slate-100">
+                    <div class="flex space-x-8">
+                        <button onclick="switchTab('defender')" id="tabDef" class="pb-2 text-xs uppercase tracking-widest tab-active">Defender View</button>
+                        <button onclick="switchTab('attacker')" id="tabAtk" class="pb-2 text-xs uppercase tracking-widest text-slate-400 hover:text-slate-600">Attacker View</button>
+                    </div>
+                    <div id="resultCount" class="pb-2 text-[10px] font-black uppercase text-slate-400 italic">Showing 0 results</div>
+                </div>
+                <div id="content" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let globalData = [];
+        let currentTab = 'defender';
+        let tags = JSON.parse(localStorage.getItem('defco_tags_v20')) || {};
+
+        document.getElementById('xlsxFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                globalData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                importTagsFromExcel();
+                initLists();
+                document.getElementById('uiContainer').classList.remove('hidden');
+                document.getElementById('dateFilterContainer').classList.remove('hidden');
+                document.getElementById('filterSection').classList.remove('hidden');
+                document.getElementById('btnDownload').classList.remove('hidden');
+                renderUI();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function importTagsFromExcel() {
+            globalData.forEach(row => {
+                const tagVal = row['web_tag'] || row['attack_tag'] || row['defender_village_tag'];
+                if (tagVal && tagVal !== 'NONE') {
+                    const lk = findKey(row, ['landing_time', 'landing time']);
+                    const cardKey = `card-${row['defender']} (${row['defender_x']}|${row['defender_y']})`.replace(/\s/g, '');
+                    const rowKey = `row-${row['defender']}(${row['defender_x']}|${row['defender_y']})-${row[lk]}-${row['attacker_x']}-${row['attacker_y']}`;
+                    if(!tags[cardKey]) tags[cardKey] = tagVal;
+                    tags[rowKey] = tagVal;
+                }
+            });
+        }
+
+        function downloadTaggedExcel() {
+            const exportData = globalData.map(row => {
+                const lk = findKey(row, ['landing_time', 'landing time']);
+                const rowKey = `row-${row['defender']}(${row['defender_x']}|${row['defender_y']})-${row[lk]}-${row['attacker_x']}-${row['attacker_y']}`;
+                return { ...row, web_tag: tags[rowKey] || 'NONE' };
+            });
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "TaggedData");
+            XLSX.writeFile(wb, "DEFCO_OP_Tagged_v20.xlsx");
+        }
+
+        function initLists() {
+            const defs = new Set(), atks = new Set();
+            globalData.forEach(row => { 
+                if(row['defender']) defs.add(row['defender']); 
+                if(row['attacker']) atks.add(row['attacker']); 
+            });
+            fillDatalist('defendersList', defs);
+            fillDatalist('attackersList', atks);
+        }
+
+        function fillDatalist(id, set) {
+            const list = document.getElementById(id);
+            list.innerHTML = '';
+            Array.from(set).sort().forEach(n => { const o = document.createElement('option'); o.value = n; list.appendChild(o); });
+        }
+
+        ['opDate', 'searchDef', 'searchAtk'].forEach(id => {
+            document.getElementById(id).addEventListener('change', renderUI);
+            document.getElementById(id).addEventListener('input', renderUI);
+        });
+
+        function parseExcelDate(val) {
+            if (!val) return 0;
+            let d = new Date(val);
+            if (!isNaN(val) && typeof val === 'number') d = new Date((val - 25569) * 86400 * 1000);
+            return isNaN(d.getTime()) ? 0 : d.getTime();
+        }
+
+        function formatAdjustedTime(val) {
+            const ts = parseExcelDate(val);
+            if (!ts) return val || '-';
+            return new Date(ts - 3599999).toTimeString().split(' ')[0];
+        }
+
+        function findKey(obj, keywords) {
+            return Object.keys(obj).find(k => keywords.some(kw => k.toLowerCase().includes(kw.toLowerCase())));
+        }
+
+        function updateTag(id, value, elementId, isCard = false) {
+            tags[id] = value;
+            localStorage.setItem('defco_tags_v20', JSON.stringify(tags));
+            const el = document.getElementById(elementId);
+            if(isCard && el) {
+                el.className = `group op-card rounded-xl bg-white shadow-lg overflow-hidden tag-${value.replace('/','')}`;
+            } else if(el) {
+                const stripe = el.querySelector('.row-stripe');
+                if(stripe) stripe.className = `row-stripe bg-tag-${value.replace('/','')}`;
+            }
+        }
+
+        function switchTab(view) {
+            currentTab = view;
+            document.getElementById('tabDef').className = view === 'defender' ? 'pb-2 text-xs uppercase tracking-widest tab-active' : 'pb-2 text-xs uppercase tracking-widest text-slate-400';
+            document.getElementById('tabAtk').className = view === 'attacker' ? 'pb-2 text-xs uppercase tracking-widest tab-active' : 'pb-2 text-xs uppercase tracking-widest text-slate-400';
+            renderUI();
+        }
+
+        function renderUI() {
+            const container = document.getElementById('content');
+            const resultLabel = document.getElementById('resultCount');
+            const selectedDate = document.getElementById('opDate').value;
+            const defF = document.getElementById('searchDef').value.toLowerCase();
+            const atkF = document.getElementById('searchAtk').value.toLowerCase();
+            container.innerHTML = '';
+
+            if (globalData.length === 0) return;
+
+            const lk = findKey(globalData[0], ['landing_time', 'landing time']);
+            const rk = findKey(globalData[0], ['report_time', 'report time']);
+            const sk = findKey(globalData[0], ['sending_time', 'sending time']);
+            const wk = findKey(globalData[0], ['waves']);
+            const tsk = findKey(globalData[0], ['tournament']);
+
+            let filtered = globalData.filter(row => {
+                const d = new Date(parseExcelDate(row[lk]));
+                if (selectedDate && d && d.toISOString().split('T')[0] !== selectedDate) return false;
+                if (defF && !(row['defender'] || "").toLowerCase().includes(defF)) return false;
+                if (atkF && !(row['attacker'] || "").toLowerCase().includes(atkF)) return false;
+                return true;
+            });
+
+            const grouped = {};
+            filtered.forEach(row => {
+                let key = currentTab === 'defender' ? `${row['defender']} (${row['defender_x']}|${row['defender_y']})` : `${row['attacker']} (${row['attacker_x']}|${row['attacker_y']})`;
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(row);
+            });
+
+            const groupKeys = Object.keys(grouped);
+            resultLabel.innerText = `Showing ${groupKeys.length} results`;
+
+            groupKeys.forEach(groupName => {
+                const cardId = `card-${groupName.replace(/\s/g, '').replace(/[^a-zA-Z0-9]/g, '')}`;
+                const cardTag = tags[cardId] || 'NONE';
+                
+                const sortedByLanding = [...grouped[groupName]].sort((a,b) => parseExcelDate(a[lk]) - parseExcelDate(b[lk]));
+                const earliestImpact = formatAdjustedTime(sortedByLanding[0][lk]);
+                
+                const displayRows = [...grouped[groupName]].sort((a, b) => {
+                    if (currentTab === 'defender') {
+                        const diffL = parseExcelDate(a[lk]) - parseExcelDate(b[lk]);
+                        if (diffL !== 0) return diffL;
+                        const diffR = parseExcelDate(a[rk]) - parseExcelDate(b[rk]);
+                        if (diffR !== 0) return diffR;
+                        return parseExcelDate(a[sk]) - parseExcelDate(b[sk]);
+                    } else {
+                        return parseExcelDate(a[sk]) - parseExcelDate(b[sk]);
+                    }
+                });
+
+                const totalWaves = displayRows.reduce((sum, r) => sum + (parseInt(r[wk]) || 1), 0);
+                const uniqueEntities = new Set(displayRows.map(r => currentTab === 'defender' ? r['attacker'] : r['defender'])).size;
+
+                const card = document.createElement('div');
+                card.id = cardId;
+                const cardClass = currentTab === 'defender' ? `tag-${cardTag.replace('/','')}` : 'tag-NONE';
+                card.className = `group op-card rounded-xl bg-white shadow-lg overflow-hidden ${cardClass}`;
+                
+                card.innerHTML = `
+                    <div class="flex justify-between items-center p-3 py-2 hover:bg-slate-50 cursor-pointer w-full" onclick="this.parentElement.classList.toggle('expanded')">
+                        <div class="flex items-center gap-4">
+                            <div>
+                                <span class="text-sm font-black text-slate-900">${groupName}</span>
+                                <div class="text-[9px] font-bold text-red-600 uppercase">Earliest: ${earliestImpact}</div>
+                            </div>
+                            <div class="flex gap-1">
+                                <span class="px-2 py-0.5 bg-blue-700 text-white rounded text-[9px] font-black uppercase">${totalWaves} Wawes</span>
+                                <span class="px-2 py-0.5 bg-slate-200 text-slate-800 rounded text-[9px] font-black uppercase">${uniqueEntities} ${currentTab === 'defender' ? 'Attackers' : 'Targets'}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3" onclick="event.stopPropagation(); this.closest('.op-card').classList.toggle('expanded')">
+                            ${currentTab === 'defender' ? `
+                            <select onchange="event.stopPropagation(); updateTag('${cardId}', this.value, '${cardId}', true)" class="bg-white border border-slate-900 text-[9px] font-bold rounded p-0.5 cursor-pointer">
+                                <option value="NONE" ${cardTag === 'NONE' ? 'selected' : ''}>STATUS</option>
+                                <option value="REAL" class="bg-red-500 text-white">REAL</option>
+                                <option value="FAKE" class="bg-green-500 text-white">FAKE</option>
+                                <option value="CAPITAL" class="bg-black text-white">CAPITAL</option>
+                                <option value="AVDV" class="bg-blue-500 text-white">AV/DV</option>
+                                <option value="OTHER" class="bg-yellow-500 text-black">OTHER</option>
+                            </select>` : ''}
+                            <svg class="chevron w-4 h-4 text-slate-900 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="4" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                    </div>
+                    <div class="collapse-content bg-slate-100 border-t border-slate-200">
+                        <div class="p-2 overflow-x-auto">
+                            <table class="w-full text-left border-separate border-spacing-y-1">
+                                <thead>
+                                    <tr class="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                                        <th class="px-3 pb-1">${currentTab === 'defender' ? 'Attacker' : 'Target'}</th>
+                                        <th class="px-1 pb-1 text-center">W</th>
+                                        <th class="px-1 pb-1 text-center text-blue-600">TS</th>
+                                        <th class="px-2 pb-1">Sending</th>
+                                        <th class="px-2 pb-1 italic">Reported</th>
+                                        <th class="px-2 pb-1 text-red-700">Impact</th>
+                                        <th class="px-2 pb-1 text-center">Tag</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${displayRows.map((row, i) => {
+                                        const rKey = `row-${row['defender']}(${row['defender_x']}|${row['defender_y']})-${row[lk]}-${row['attacker_x']}-${row['attacker_y']}`;
+                                        const rTag = tags[rKey] || 'NONE';
+                                        const rId = `row-el-${cardId}-${i}`;
+                                        return `
+                                        <tr id="${rId}" class="compact-row bg-white hover:bg-yellow-50 border border-slate-200">
+                                            <td class="row-container border-y border-l border-slate-200 rounded-l-lg overflow-hidden">
+                                                <div class="row-stripe bg-tag-${rTag.replace('/','')}"></div>
+                                                <div class="px-3 flex flex-col justify-center">
+                                                    <div class="font-black text-slate-900 uppercase text-[11px] leading-tight">${currentTab === 'defender' ? row['attacker'] : row['defender']}</div>
+                                                    <div class="font-mono text-[9px]"><span class="coord-pill">${currentTab === 'defender' ? (row['attacker_x']+'|'+row['attacker_y']) : (row['defender_x']+'|'+row['defender_y'])}</span></div>
+                                                </div>
+                                            </td>
+                                            <td class="px-1 text-center font-black text-slate-700 text-sm border-y border-slate-200">${row[wk] || 1}</td>
+                                            <td class="px-1 text-center font-black text-blue-700 text-sm border-y border-slate-200">${Math.max(0, Math.round((parseInt(row[tsk])-100)/20)) || 0}</td>
+                                            <td class="px-2 text-slate-600 font-mono border-y border-slate-200 font-bold text-xs">${formatAdjustedTime(row[sk])}</td>
+                                            <td class="px-2 text-slate-400 font-mono border-y border-slate-200 italic text-[10px]">${formatAdjustedTime(row[rk])}</td>
+                                            <td class="px-2 font-black text-white bg-slate-900 border-y border-slate-900 text-sm font-mono">${formatAdjustedTime(row[lk])}</td>
+                                            <td class="px-2 border-y border-r border-slate-200 rounded-r-lg text-center">
+                                                <select onchange="updateTag('${rKey}', this.value, '${rId}', false)" class="bg-slate-50 border border-slate-300 text-[9px] font-bold rounded p-0.5 cursor-pointer">
+                                                    <option value="NONE" ${rTag === 'NONE' ? 'selected' : ''}>TAG</option>
+                                                    <option value="REAL" class="text-red-600">REAL</option>
+                                                    <option value="FAKE" class="text-green-600">FAKE</option>
+                                                    <option value="CAPITAL" class="text-black">CAPITAL</option>
+                                                    <option value="AVDV" class="text-blue-600">AV/DV</option>
+                                                    <option value="OTHER" class="text-yellow-600">OTHER</option>
+                                                </select>
+                                            </td>
+                                        </tr>`}).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>
